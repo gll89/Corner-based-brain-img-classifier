@@ -1,0 +1,1 @@
+the folders of 3UnifiedTiff-2category and 8diffSizeTrainImgs are the same as that in the folder of CTImgs

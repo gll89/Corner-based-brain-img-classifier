@@ -1,0 +1,355 @@
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedList;
+import java.util.Map.Entry;
+
+public class Main {
+
+	public static void main(String[] args) throws IOException {
+		
+		
+			String folder = "CT";   //"MRI";  //
+			
+			//1. read the labels of training and validation imgs
+			String root_path = "E:/GLL-BMC/BMC/Image_revised/"+folder+"Imgs/";
+			String rootPath = root_path+"8diffSizeTrainImgs_2/"+"Classifier"+"/";
+			String normalImgs = root_path+"3UnifiedTiff-2category/normal/";
+			String lessImgs  = root_path+"3UnifiedTiff-2category/abnrml/";
+			String resultPath = root_path+"9resultTest/Classifier/"; 
+			String txtPrePath = root_path+"5CornerTextTIG/";
+			String testImgPath =root_path+"8diffSizeTrainImgs_2/"+"Test/";  //test img path
+			
+
+			HashMap<String, Integer> imgLabels = new HashMap<String, Integer>(); //store the labels of training and testing images
+			LabelImages(imgLabels, normalImgs, 0);  //the label of normal images is 0; and lession's is 1 
+//System.out.println("normal path = "+normalImgs);
+			LabelImages(imgLabels, lessImgs, 1);	
+System.out.println("the number of all the imgs is "+imgLabels.size());	
+	
+			//2. generate the classifier 
+			//ps: th = 10 k=(15~21) and th=11 k =(9~21) haven't done
+			for (int th = 2; th <= 2; th++)  {   // CT_th = 1:10
+//				for (int th = 3; th <= 12; th++)  {   // th of MRI [3, 12]
+				for (int k = 3; k < 22; k += 2 ){  // the k of KNN  3~12
+					//2.1 yield the validation img labels
+//					String tmpStr = "============Classifer "+ c+"  "+th+"Th "+ k +"NN==============";
+					String tmpStr = "============"+th+"Th "+ k +"NN==============";
+					System.out.println(tmpStr);
+
+					float[] valdResult = trainClassifier(imgLabels,rootPath, testImgPath, txtPrePath, k, th,resultPath, folder); 
+				}
+			}
+	
+//		}
+	}
+	
+	private static float[] trainClassifier(HashMap<String, Integer> imgLabels, String rootPath, String testImgPath, String txtPrePath, int k, int th,
+			String resultPath, String folder) throws IOException {
+		/*
+		 * f-folder CV of a classifier 
+		 * 
+		 */
+//System.out.println("root path = "+rootPath);
+		int numCategory = 2;   //normal(label is 0) and AD(label is 1)
+		float cornerFile = (float) (th*0.01);
+		float[] valdResult = new float[7];
+		
+		for(int f = 1; f<=5; f++){
+			System.out.println("**********************"+f+"Fold************************");
+			// 1.1.read training and validation images
+			String classifierPath = rootPath + "Fold" + f+"/";
+			String trainImgPath = classifierPath +"Train/";  //path of training data 
+			String validImgPath = classifierPath +"Validation/"; //path of validation data
+			
+			ArrayList<String> imgNamesTrain = new ArrayList<String>(); //img names of training data
+			ArrayList<String> imgNamesVald = new ArrayList<String>(); //img names of test data
+			CornerFileRead1 cfr = new CornerFileRead1();   //
+//	System.out.print("read train imgs name......");
+			ArrayList<ArrayList<int[]>> cornerListTrain = cfr.createCornerList(trainImgPath,txtPrePath,cornerFile, imgNamesTrain, folder);
+//	System.out.print("read test imgs......");
+			ArrayList<ArrayList<int[]>> cornerListTest = cfr.createCornerList(testImgPath, txtPrePath, cornerFile, imgNamesVald, folder);
+	System.out.println("train image size = "+cornerListTrain.size()+"\nVald image size = "+cornerListTest.size());
+	
+			// 1.2. calculate the similarity between training and testing images, and save them 
+			FileWriter fw = null;
+			try{
+				String runtimePath = resultPath+"/ValdRuntime"+cornerFile+"Th"+k+"NNFold"+f+".txt";  //
+				File file = new File(runtimePath);	   //This text saves the results of runtime
+				fw = new FileWriter(file);
+			}catch(IOException e){
+				e.printStackTrace();
+			}
+			float[][] simMatr = SimCalculation(cornerListTrain, cornerListTest, fw);
+	System.out.println();		
+			// 1.3. order similarity
+			ArrayList<LinkedList<Float>> simList = new ArrayList<LinkedList<Float>>();  
+			ArrayList<LinkedList<Integer>> simListInd = SimOrder(simMatr, simList);
+			
+			HashMap<String, Integer> valdLabels = TestImgLabel(numCategory, k, simListInd, validImgPath, 
+					imgNamesVald, imgNamesTrain, imgLabels);
+		
+			
+			//1.4 write the validation images' labels into a text file and calculate the statistics
+			String labelPath = resultPath+"/Label"+cornerFile+"Th"+k+"NNFold"+f+".txt";
+			String sttResult = resultPath+"/SttResult"+th+"Th"+k+"NNFold"+f+".txt";
+			float[] sttFloat = new float[7];
+			valdImgLabAnlysWrite(imgLabels, valdLabels, labelPath, sttResult, sttFloat);
+			
+			for (int tmp = 0; tmp<7; tmp++)
+				valdResult[tmp] += sttFloat[tmp];
+			
+		}   //end 5-folder CV for-loop
+		
+		for (int tmp = 0; tmp<7; tmp++)
+			valdResult[tmp] /= 5;
+		
+		String sttResult = resultPath+"/SttResult"+th+"Th"+k+"NN.txt";
+		File fileRes = new File(sttResult);	   //This text saves the results of runtime
+		FileWriter fwRes = new FileWriter(fileRes);
+//		fwRes.write("k="+k+" th="+th+"fold"+f+": ");
+		String outputStr = "acc = "+ valdResult[0]+"\t"+"rec = "+ valdResult[1]+"\t"+"pre = "+ valdResult[2]+"\t"+"spe = "+ valdResult[3]+"\t"+"NPV = "+ valdResult[4]
+				+"\t"+"MCC = "+ valdResult[5]+"\t"+"fscore = "+ valdResult[6]+"\n";
+		fwRes.write(outputStr);
+		fwRes.close();
+		System.out.println(outputStr);
+		
+		return valdResult;
+	}
+	
+	private static void valdImgLabAnlysWrite(HashMap<String, Integer> imgLabels, HashMap<String, Integer> valdImgLabels,
+			String labelPath, String sttResult, float[] sttFloat) throws IOException {
+
+		/*
+		 *  the label of normal images is 0; and lession's is 1 
+		 *  to count the accuracy, recall, precision, specificity, MCC and F1-score
+		 *  stimuteously, write the validlabel and true label into a text file
+		 */
+		
+
+		File fileRes = new File(labelPath);	   //This text saves the results of runtime
+		FileWriter fw = new FileWriter(fileRes);
+		
+		int TP = 0, TN = 0, FN = 0, FP = 0;
+		Iterator<Entry<String, Integer>> ite = valdImgLabels.entrySet().iterator();
+		while(ite.hasNext()){
+			Entry en = (Entry)ite.next();
+			String key = (String)en.getKey();
+			Integer val = (Integer)en.getValue(); //the vald img label
+			Integer valT = imgLabels.get(key);  // the true label
+			// count TP, TN, FP and FN
+			if (val == valT) {  //true example
+				if (valT == 0) {  //normal as positive, !!! Do not write 1 into 0 !!!
+					TP++;
+				}else{     //abnormal as positive
+					TN++;
+				}
+			}else{
+				if (valT == 0) {  
+					FP++;
+				}else{
+					FN++;
+				}
+			}
+			fw.write(key+"   "+val+"   "+valT+"\n");
+		}
+		fw.close();
+		
+		float acc = (float)(TP+TN)/(TP+FP+TN+FN);
+		float rec = (float)TP/(TP+FN);
+		float pre = (float)TP/(TP+FP);
+		float spe = (float)TN/(TN+FP);
+		float NPV= (float)TN/(TN+FN);
+		float MCC = (float) ((float)(TP*TN - FP*FN)/Math.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN)));
+		float fscore = 0;
+		if (pre == 0 || rec == 0)
+			fscore = 0;
+		else 
+			fscore = (2*pre*rec)/(pre+rec);
+		
+		sttFloat[0] = acc;
+		sttFloat[1] = rec;
+		sttFloat[2] = pre;
+		sttFloat[3] = spe;
+		sttFloat[4] = NPV;
+		sttFloat[5] = MCC;
+		sttFloat[6] = fscore;
+		
+		String outputStr = "acc = "+ acc+"\t"+"rec = "+ rec+"\t"+"pre = "+ pre+"\t"+"spe = "+ spe+"\t"+"NPV = "+ NPV+"\t"+"MVV = "+ MCC+"\t"+"fscore = "+ fscore+"\n";
+		outputStr = outputStr+"\n TP = "+TP+" TN = "+TN+" FP = "+FP+" FN = "+FN+"\n";
+		fileRes = new File(sttResult);	   //This text saves the results of runtime
+		fw = new FileWriter(fileRes);
+		fw.write(outputStr);
+		fw.close();
+		System.out.println(outputStr);
+
+	
+		
+	}
+
+	private static HashMap<String, Integer> TestImgLabel(int numCategory, int KS, ArrayList<LinkedList<Integer>> simListInd, String path,
+			ArrayList<String> imgNamesTest, ArrayList<String> imgNamesTrain, HashMap<String, Integer> imgLabels){
+		/*
+		 * @numCategory: the # of categories
+		 * @KS: the K of KNN
+		 * @simListInd: the similarity among validation and training imgs
+		 * @ path:
+		 * @imgNamesTest: the name list of validation imgs
+		 * @imgNamesTrain: the name list of training imgs
+		 * @imgLabels: labels of all the images for training the classifer
+		 */
+//System.out.println("imgLabels size = "+imgLabels.size());
+		int leng = imgNamesTest.size();
+		HashMap<String, Integer> testImgLabs = new HashMap<String, Integer>();
+//	    int[] testImgLabs = new int[leng];
+		for (int i = 0; i<leng; i++){
+			LinkedList<Integer> tmpSimImgs = simListInd.get(i);  
+			int[] simImgLabs = new int[numCategory];  
+			for (int j = 0; j < KS; j++){
+				int imgInd = tmpSimImgs.get(j);
+				String imgName = imgNamesTrain.get(imgInd);
+				int lab = imgLabels.get(imgName);
+				simImgLabs[lab] = simImgLabs[lab] + 1;  
+			}
+			
+			int labNum = -1, lab = -1;
+			for (int j = 0; j<numCategory; j++){
+				if (simImgLabs[j]>labNum){
+					labNum = simImgLabs[j];
+					lab = j;
+				}
+			}
+			testImgLabs.put(imgNamesTest.get(i), lab);  //[i] = lab;
+		}
+	    
+		return testImgLabs;
+	}
+	
+	
+	private static ArrayList<LinkedList<Integer>> SimOrder(float[][] simMatr, ArrayList<LinkedList<Float>> simList) {
+			
+			ArrayList<LinkedList<Integer>> simListInd = new ArrayList<LinkedList<Integer>>();
+			int lengR = simMatr.length;
+			int lengC = simMatr[0].length;
+			for(int i = 0; i<lengR; i++){
+				LinkedList<Float> simLinkedList = new LinkedList<Float>();  
+				LinkedList<Integer> simLinkedListInd = new LinkedList<Integer>();  
+				simLinkedList.add(simMatr[i][0]);
+				simLinkedListInd.add(0);
+				for (int j = 1; j< lengC; j++){
+					Float element = simMatr[i][j];
+					int count = 0;
+					boolean insertFlag = false;
+					Iterator<Float> ite = simLinkedList.iterator();
+					while (ite.hasNext()){
+						Float tmp = ite.next();
+						if (element >= tmp){
+							simLinkedList.add(count, element);
+							simLinkedListInd.add(count, j);
+							break;
+						}
+						count++;
+					}
+					if (insertFlag == false){
+						simLinkedList.add(element);
+						simLinkedListInd.add(count, j);
+					}
+				}
+				simListInd.add(simLinkedListInd);
+				simList.add(simLinkedList);
+			}
+			 return simListInd;
+		}
+	
+	
+	private static float[][] SimCalculation(ArrayList<ArrayList<int[]>> cornerListTrain,
+			ArrayList<ArrayList<int[]>> cornerListTest, FileWriter fw) {
+		
+		System.out.println("=======Similarity Calculation======");
+		long timeSum = 0;
+		int lengTrain = cornerListTrain.size();
+		int lengTest = cornerListTest.size();
+		float[][] simMatr = new float[lengTest][lengTrain];
+		System.out.println("There are "+lengTest+" validation data");
+		for (int i = 0; i< lengTest; i++){
+			ArrayList<int[]> cornerArr1 = cornerListTest.get(i);
+			int rowNum = cornerArr1.size();
+			for (int j = 0; j< lengTrain; j++){
+				ArrayList<int[]> cornerArr2 = cornerListTrain.get(j);
+				int columnNum = cornerArr2.size();
+long startTime = System.currentTimeMillis();	
+				CornerMatchHung cornerMatch = new CornerMatchHung(cornerArr1, cornerArr2);
+				int[][] MIV = cornerMatch.CreateMIV();
+				int[][] MIVCopy = new int[rowNum][columnNum];
+				for(int m = 0; m<rowNum; m++)
+					for(int n = 0; n<columnNum; n++)
+						MIVCopy[m][n] = MIV[m][n];
+				
+				// my hungarian
+//				int[][] flag = cornerMatch.HungMaxMatch(MIV);
+//				cornerMatch = null; 
+				
+				// download hugarian
+				HungarianAlgorithm1 ha = new HungarianAlgorithm1(MIV);
+				int[] result = ha.execute();
+				MIV = null;
+				int lengCorner = result.length;
+				int[][] flag = new int[lengCorner][lengCorner];				
+				for (int iInd = 0; iInd< lengCorner; iInd++){
+					for(int jInd = 0; jInd< lengCorner; jInd++){
+						flag[iInd][jInd] = 0;
+					}
+					int tmpInd = result[iInd];
+					flag[iInd][tmpInd] = 1;
+				}
+				
+
+				SimilarityCalculation simCal = new SimilarityCalculation(); 
+				int balance = Math.abs((rowNum-columnNum));  
+//System.out.println("Calculate similarity: rowNum="+rowNum+" columnNum="+columnNum);
+				float sim = simCal.calculateSimilarity(flag,MIVCopy, balance);
+//System.out.println("Similarity: "+sim);
+				simMatr[i][j] = sim;
+				MIVCopy = null;
+				simCal = null;
+				long endTime = System.currentTimeMillis();
+				long timeTmp = endTime-startTime;
+				timeSum += timeTmp;
+			} 
+			String tmp = " Total time is "+(timeSum/60000)+"m, "+(timeSum/1000) +"s";
+System.out.print("Validation "+i+tmp+"\t");
+			try {
+				fw.write(tmp);
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+		}
+		
+		try {
+			fw.close();
+		} catch (IOException e) {
+			// TODO Auto-generated catch block
+			e.printStackTrace();
+		}
+		
+		
+		return simMatr;
+	}
+
+
+	
+	private static void LabelImages(HashMap<String, Integer> imgLabels, String imgPath, Integer label){
+			File f = new File(imgPath);
+System.out.println("imgPath: "+imgPath);
+			String[] imgArr = f.list();
+			int leng = imgArr.length;
+			for (int i = 0; i<leng; i++){
+				imgLabels.put(imgArr[i], label);
+			}
+		}
+	
+}
